@@ -1,62 +1,102 @@
-from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.serialization import load_pem_public_key
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives import hashes
 import socket
 
-server_private_key = rsa.generate_private_key(
-    public_exponent=65537,
-    key_size=2048
-)
+private_file = 'server_private_key.pem'
+public_file = 'server_public_key.pem'
+allowed = []
 
-server_public_key = server_private_key.public_key()
 
-def receiving(conn):
-    data = conn.recv(1024)
-    return data
+def generate_keys():
+    private_key = rsa.generate_private_key(
+        public_exponent=65537,
+        key_size=2048
+    )
+    public_key = private_key.public_key()
 
-def sending(conn, message):
-    conn.send(message)
+    with open(private_file, 'wb') as f:
+        f.write(private_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.TraditionalOpenSSL,
+            encryption_algorithm=serialization.NoEncryption()
+        ))
+
+    with open(public_file, 'wb') as f:
+        f.write(public_key.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo
+        ))
+
+
+def privetkluch():
+    with open(private_file, 'rb') as f:
+        private_key = serialization.load_pem_private_key(
+            f.read(),
+            password=None
+        )
+    return private_key
+
+
+def loadpublic(public_key_file):
+    with open(public_key_file, 'rb') as f:
+        public_key = load_pem_public_key(f.read())
+    return public_key
+
+
+def encrypt_message(public_key, message):
+    encrypted_message = public_key.encrypt(
+        message.encode('utf-8'),
+        padding.OAEP(
+            mgf=padding.MGF1(algorithm=hashes.SHA256()),
+            algorithm=hashes.SHA256(),
+            label=None
+        )
+    )
+    return encrypted_message
+
+
+def decrypt_message(private_key, encrypted_message):
+    decrypted_message = private_key.decrypt(
+        encrypted_message,
+        padding.OAEP(
+            mgf=padding.MGF1(algorithm=hashes.SHA256()),
+            algorithm=hashes.SHA256(),
+            label=None
+        )
+    )
+    return decrypted_message.decode('utf-8')
+
 
 def server():
+    generate_keys()
+
+    private_key = privetkluch()
+
+
+    for i in range(2):
+        allowed.append(loadpublic(f'client_public_key_{i}.pem'))
+
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.bind(('localhost', 12345))
-    server_socket.listen(1)
-
-    print("Сервер ожидает подключения...")
-
-    conn, addr = server_socket.accept()
-
-    client_public_key = serialization.load_pem_public_key(
-        receiving(conn),
-    )
-
-    sending(conn, server_public_key.public_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PublicFormat.SubjectPublicKeyInfo
-    ))
+    server_socket.listen(5)
 
     while True:
-        encrypted_message = receiving(conn)
-        decrypted_message = server_private_key.decrypt(
-            encrypted_message,
-            padding.OAEP(
-                mgf=padding.MGF1(algorithm=hashes.SHA256()),
-                algorithm=hashes.SHA256(),
-                label=None
-            )
-        )
-        print("Получено сообщение от клиента:", decrypted_message.decode())
+        client_socket, addr = server_socket.accept()
 
-        message = input("Ответ сервера: ")
-        encrypted_response = client_public_key.encrypt(
-            message.encode(),
-            padding.OAEP(
-                mgf=padding.MGF1(algorithm=hashes.SHA256()),
-                algorithm=hashes.SHA256(),
-                label=None
-            )
-        )
-        sending(conn, encrypted_response)
+        data = client_socket.recv(1024)
+
+        received_public_key = load_pem_public_key(data)
+
+        if received_public_key not in allowed:
+            print("Недопустимый публичный ключ. Соединение разорвано.")
+            client_socket.close()
+        else:
+            print("Публичный ключ допустим. Продолжение работы.")
+
+        client_socket.close()
+
 
 server()
