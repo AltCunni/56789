@@ -5,9 +5,9 @@ from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives import hashes
 import socket
 
-private_file = 'server_private_key.pem'
-public_file = 'server_public_key.pem'
-allowed = []
+server_private_key_file = 'server_private_key.pem'
+server_public_key_file = 'server_public_key.pem'
+allowed_public_keys = []  # Список разрешенных публичных ключей
 
 
 def generate_keys():
@@ -17,22 +17,22 @@ def generate_keys():
     )
     public_key = private_key.public_key()
 
-    with open(private_file, 'wb') as f:
+    with open(server_private_key_file, 'wb') as f:
         f.write(private_key.private_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PrivateFormat.TraditionalOpenSSL,
             encryption_algorithm=serialization.NoEncryption()
         ))
 
-    with open(public_file, 'wb') as f:
+    with open(server_public_key_file, 'wb') as f:
         f.write(public_key.public_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PublicFormat.SubjectPublicKeyInfo
         ))
 
 
-def privetkluch():
-    with open(private_file, 'rb') as f:
+def load_private_key():
+    with open(server_private_key_file, 'rb') as f:
         private_key = serialization.load_pem_private_key(
             f.read(),
             password=None
@@ -40,7 +40,7 @@ def privetkluch():
     return private_key
 
 
-def loadpublic(public_key_file):
+def load_public_key(public_key_file):
     with open(public_key_file, 'rb') as f:
         public_key = load_pem_public_key(f.read())
     return public_key
@@ -73,11 +73,11 @@ def decrypt_message(private_key, encrypted_message):
 def server():
     generate_keys()
 
-    private_key = privetkluch()
+    private_key = load_private_key()
 
-
-    for i in range(2):
-        allowed.append(loadpublic(f'client_public_key_{i}.pem'))
+    # Загрузка разрешенных ключей
+    for i in range(3):  # Пример: загружаем три публичных ключа для проверки
+        allowed_public_keys.append(load_public_key(f'client_public_key_{i}.pem'))
 
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.bind(('localhost', 12345))
@@ -90,7 +90,7 @@ def server():
 
         received_public_key = load_pem_public_key(data)
 
-        if received_public_key not in allowed:
+        if received_public_key not in allowed_public_keys:
             print("Недопустимый публичный ключ. Соединение разорвано.")
             client_socket.close()
         else:
