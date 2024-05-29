@@ -1,102 +1,155 @@
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.hazmat.primitives.serialization import load_pem_public_key
-from cryptography.hazmat.primitives.asymmetric import padding
-from cryptography.hazmat.primitives import hashes
+import os
+import shutil
 import socket
+import logging
+import sqlite3
 
-private_file = 'server_private_key.pem'
-public_file = 'server_public_key.pem'
-allowed = []
+HOST = 'localhost'
+PORT = 9090
+ROOT_DIR = 'restricted_folder' #все действия пользователя будут ограничены в пределах директории
+DB_FILE = 'users.db'
 
-
-def generate_keys():
-    private_key = rsa.generate_private_key(
-        public_exponent=65537,
-        key_size=2048
-    )
-    public_key = private_key.public_key()
-
-    with open(private_file, 'wb') as f:
-        f.write(private_key.private_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PrivateFormat.TraditionalOpenSSL,
-            encryption_algorithm=serialization.NoEncryption()
-        ))
-
-    with open(public_file, 'wb') as f:
-        f.write(public_key.public_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PublicFormat.SubjectPublicKeyInfo
-        ))
+logging.basicConfig(filename='server_log.txt', level=logging.INFO)
 
 
-def privetkluch():
-    with open(private_file, 'rb') as f:
-        private_key = serialization.load_pem_private_key(
-            f.read(),
-            password=None
-        )
-    return private_key
+def tablesql():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+
+    c.execute('''CREATE TABLE IF NOT EXISTS users
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 username TEXT NOT NULL UNIQUE,
+                 password TEXT NOT NULL,
+                 folder TEXT NOT NULL)''')
+
+    conn.commit()
+    conn.close()
 
 
-def loadpublic(public_key_file):
-    with open(public_key_file, 'rb') as f:
-        public_key = load_pem_public_key(f.read())
-    return public_key
+def register_user(username, password):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+
+    folder = os.path.join(ROOT_DIR, username)
+    os.mkdir(folder)
+
+    c.execute("INSERT INTO users (username, password, folder) VALUES (?, ?, ?)",
+              (username, password, folder))
+
+    conn.commit()
+    conn.close()
 
 
-def encrypt_message(public_key, message):
-    encrypted_message = public_key.encrypt(
-        message.encode('utf-8'),
-        padding.OAEP(
-            mgf=padding.MGF1(algorithm=hashes.SHA256()),
-            algorithm=hashes.SHA256(),
-            label=None
-        )
-    )
-    return encrypted_message
+def authenticate_user(username, password):
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+
+    c.execute("SELECT * FROM users WHERE username=? AND password=?", (username, password))
+    user = c.fetchone()
+
+    conn.close()
+
+    if user:
+        return True, user[3]  # Возвращаем папку пользователя при успешной аутентификации
+    else:
+        return False, None
 
 
-def decrypt_message(private_key, encrypted_message):
-    decrypted_message = private_key.decrypt(
-        encrypted_message,
-        padding.OAEP(
-            mgf=padding.MGF1(algorithm=hashes.SHA256()),
-            algorithm=hashes.SHA256(),
-            label=None
-        )
-    )
-    return decrypted_message.decode('utf-8')
+def list_files(user_folder):
+    files = os.listdir(user_folder)
+    return '\\n'.join(files)
 
 
-def server():
-    generate_keys()
+def create_folder(user_folder, folder_name):
+    os.mkdir(os.path.join(user_folder, folder_name))
+    return f"Папка '{folder_name}' успешно создана."
 
-    private_key = privetkluch()
+
+def delete_folder(user_folder, folder_name):
+    shutil.rmtree(os.path.join(user_folder, folder_name))
+    return f"Папка '{folder_name}' успешно удалена."
 
 
-    for i in range(2):
-        allowed.append(loadpublic(f'client_public_key_{i}.pem'))
+def delete_file(user_folder, file_name):
+    os.remove(os.path.join(user_folder, file_name))
+    return f"Файл '{file_name}' успешно удален."
 
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.bind(('localhost', 12345))
-    server_socket.listen(5)
+
+def rename_file(user_folder, old_name, new_name):
+    os.rename(os.path.join(user_folder, old_name), os.path.join(user_folder, new_name))
+    return f"Файл '{old_name}' успешно переименован в '{new_name}'."
+
+
+def copy_file_to_server(user_folder, file_name):
+    shutil.copyfile(file_name, os.path.join(user_folder, f'server_{file_name}'))
+    return f"Файл '{file_name}' успешно скопирован на сервер."
+
+
+def copy_file_to_client(user_folder, file_name):
+    shutil.copyfile(os.path.join(user_folder, file_name), f'client_{file_name}')
+    return f"Файл '{file_name}' успешно скопирован на клиент."
+
+
+def process_command(command, user_folder):
+    parts = command.split(' ')
+    if parts[0] == 'list':
+        return list_files(user_folder)
+    elif parts[0] == 'create_folder':
+        folder_name = parts[1]
+        return create_folder(user_folder, folder_name)
+    elif parts[0] == 'delete_folder':
+        folder_name = parts[1]
+        return delete_folder(user_folder, folder_name)
+    elif parts[0] == 'delete_file':
+        file_name = parts[1]
+        return delete_file(user_folder, file_name)
+    elif parts[0] == 'rename_file':
+        old_name = parts[1]
+        new_name = parts[2]
+        return rename_file(user_folder, old_name, new_name)
+    elif parts[0] == 'copy_to_server':
+        file_name = parts[1]
+        return copy_file_to_server(user_folder, file_name)
+    elif parts[0] == 'copy_to_client':
+        file_name = parts[1]
+        return copy_file_to_client(user_folder, file_name)
+    elif parts[0] == 'exit':
+        return "Выход"
+    else:
+        return "Неверная команда"
+
+
+def start_server():
+    tablesql()
+
+    sock = socket.socket()
+    sock.bind((HOST, PORT))
+    sock.listen()
 
     while True:
-        client_socket, addr = server_socket.accept()
+        conn, addr = sock.accept()
 
-        data = client_socket.recv(1024)
-
-        received_public_key = load_pem_public_key(data)
-
-        if received_public_key not in allowed:
-            print("Недопустимый публичный ключ. Соединение разорвано.")
-            client_socket.close()
+        request = conn.recv(1024).decode()
+        if request.startswith('register'):
+            _, username, password = request.split(' ')
+            register_user(username, password)
+            response = f"Пользователь '{username}' успешно зарегистрирован."
         else:
-            print("Публичный ключ допустим. Продолжение работы.")
+            username, password, command = request.split(' ')
+            authenticated, user_folder = authenticate_user(username, password)
 
-        client_socket.close()
+            if authenticated:
+                response = process_command(command, user_folder)
+            else:
+                response = "Ошибка аутентификации. Проверьте правильность логина и пароля."
 
+        conn.send(response.encode())
 
-server()
+        logging.info(f"Адрес: {addr}, Команда: {request}, Ответ: {response}")
+
+        if response == "Выход":
+            break
+
+    sock.close()
+
+start_server()

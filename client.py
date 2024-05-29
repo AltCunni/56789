@@ -1,57 +1,25 @@
-from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import padding
-from cryptography.hazmat.primitives import hashes
 import socket
 
-client_private_key = rsa.generate_private_key(
-    public_exponent=65537,
-    key_size=2048
-)
+HOST = 'localhost'
+PORT = 9090
 
-client_public_key = client_private_key.public_key()
 
-def receiving(conn):
-    data = conn.recv(1024)
-    return data
+def send_command(command):
+    sock = socket.socket()
+    sock.connect((HOST, PORT))
 
-def sending(conn, message):
-    conn.send(message)
+    sock.send(command.encode())
 
-def client():
-    client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    client_socket.connect(('localhost', 12345))
+    response = sock.recv(1024).decode()
+    print(response)
 
-    sending(client_socket, client_public_key.public_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PublicFormat.SubjectPublicKeyInfo
-    ))
+    sock.close()
 
-    server_public_key = serialization.load_pem_public_key(
-        receiving(client_socket),
-    )
 
-    while True:
-        message = input("Сообщение для сервера: ")
-        encrypted_message = server_public_key.encrypt(
-            message.encode(),
-            padding.OAEP(
-                mgf=padding.MGF1(algorithm=hashes.SHA256()),
-                algorithm=hashes.SHA256(),
-                label=None
-            )
-        )
-        sending(client_socket, encrypted_message)
+while True:
+    command = input('Kitty: ')
 
-        encrypted_response = receiving(client_socket)
-        decrypted_response = client_private_key.decrypt(
-            encrypted_response,
-            padding.OAEP(
-                mgf=padding.MGF1(algorithm=hashes.SHA256()),
-                algorithm=hashes.SHA256(),
-                label=None
-            )
-        )
-        print("Ответ от сервера:", decrypted_response.decode())
+    send_command(command)
 
-client()
+    if command == 'exit':
+        break
